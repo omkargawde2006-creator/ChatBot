@@ -1,0 +1,458 @@
+import { useState, useEffect, useRef } from "react";
+
+const INTENTS = {
+  greeting: ["hello", "hi", "hey", "good morning", "good evening", "howdy"],
+  returns_refunds: ["return", "refund", "defective", "broken", "damaged", "exchange", "money back"],
+  order_status: ["order", "tracking", "shipped", "delivery", "where is", "status"],
+  product_inquiry: ["product", "specs", "features", "price", "cost", "available", "stock"],
+  technical_support: ["not working", "error", "issue", "problem", "fix", "broken", "bug", "help"],
+  billing: ["bill", "invoice", "charge", "payment", "subscription", "plan"],
+  goodbye: ["bye", "goodbye", "thanks", "thank you", "that's all", "done"],
+};
+
+const SYSTEM_PROMPT = `You are a friendly and professional customer support agent for a tech company. Your role:
+- Handle returns, refunds, order tracking, product questions, billing, and technical support
+- Be concise (2-3 sentences max per response)
+- Be empathetic and solution-focused
+- If you detect intent from context: ${JSON.stringify(INTENTS)}
+- For returns/refunds: acknowledge the issue, apologize briefly, explain the 30-day return policy
+- For order status: ask for order number to look it up
+- For technical issues: ask clarifying questions step by step
+- Always end with "Is there anything else I can help you with?" unless saying goodbye
+- Keep a warm, professional tone`;
+
+function detectIntent(text) {
+  const lower = text.toLowerCase();
+  let best = { intent: "general", score: 0 };
+  for (const [intent, keywords] of Object.entries(INTENTS)) {
+    const score = keywords.filter(k => lower.includes(k)).length;
+    if (score > best.score) best = { intent, score };
+  }
+  return best.intent;
+}
+
+const QUICK_REPLIES = [
+  "Track my order",
+  "Request a refund",
+  "Technical support",
+  "Billing question",
+];
+
+export default function App() {
+  const [messages, setMessages] = useState([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "👋 Hello! I'm your customer support assistant. How can I help you today?",
+      intent: "greeting",
+      time: new Date(),
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const sendMessage = async (text) => {
+    const userText = (text || input).trim();
+    if (!userText || loading) return;
+    setInput("");
+
+    const intent = detectIntent(userText);
+    const userMsg = {
+      id: Date.now() + "-u",
+      role: "user",
+      content: userText,
+      intent,
+      time: new Date(),
+    };
+
+    const history = [...messages, userMsg];
+    setMessages(history);
+    setLoading(true);
+
+    try {
+      const apiMessages = history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: SYSTEM_PROMPT,
+          messages: apiMessages,
+        }),
+      });
+
+      const data = await res.json();
+      const reply = data.content?.find((b) => b.type === "text")?.text || "I'm sorry, I couldn't process that. Please try again.";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + "-b",
+          role: "assistant",
+          content: reply,
+          intent,
+          time: new Date(),
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + "-err",
+          role: "assistant",
+          content: "Sorry, I'm having trouble connecting right now. Please try again in a moment.",
+          intent: "error",
+          time: new Date(),
+        },
+      ]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  const fmt = (d) =>
+    d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+  const intentBadge = {
+    returns_refunds: { label: "Returns", color: "#f59e0b" },
+    order_status: { label: "Orders", color: "#3b82f6" },
+    product_inquiry: { label: "Products", color: "#8b5cf6" },
+    technical_support: { label: "Tech", color: "#ef4444" },
+    billing: { label: "Billing", color: "#10b981" },
+    greeting: { label: "Greeting", color: "#6b7280" },
+    goodbye: { label: "Goodbye", color: "#6b7280" },
+    general: null,
+  };
+
+  return (
+    <div style={styles.page}>
+      {/* Decorative blobs */}
+      <div style={styles.blob1} />
+      <div style={styles.blob2} />
+
+      <div style={styles.window}>
+        {/* Header */}
+        <div style={styles.header}>
+          <div style={styles.headerLeft}>
+            <div style={styles.avatar}>
+              <span style={{ fontSize: 22 }}>🤖</span>
+            </div>
+            <div>
+              <div style={styles.agentName}>Support Assistant</div>
+              <div style={styles.statusRow}>
+                <span style={styles.dot} />
+                <span style={styles.statusText}>Online · Powered by Claude AI</span>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() =>
+              setMessages([
+                {
+                  id: "welcome-" + Date.now(),
+                  role: "assistant",
+                  content: "👋 Hello! New session started. How can I assist you today?",
+                  intent: "greeting",
+                  time: new Date(),
+                },
+              ])
+            }
+            style={styles.newBtn}
+            title="New Conversation"
+          >
+            ✦ New Chat
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div style={styles.messages}>
+          {messages.map((msg) => {
+            const isBot = msg.role === "assistant";
+            const badge = intentBadge[msg.intent];
+            return (
+              <div
+                key={msg.id}
+                style={{
+                  ...styles.msgRow,
+                  justifyContent: isBot ? "flex-start" : "flex-end",
+                }}
+              >
+                {isBot && (
+                  <div style={styles.botIcon}>🤖</div>
+                )}
+                <div style={{ maxWidth: "72%", display: "flex", flexDirection: "column", alignItems: isBot ? "flex-start" : "flex-end" }}>
+                  <div
+                    style={{
+                      ...styles.bubble,
+                      ...(isBot ? styles.botBubble : styles.userBubble),
+                    }}
+                  >
+                    {msg.content}
+                  </div>
+                  <div style={styles.meta}>
+                    <span style={styles.timeStr}>{fmt(msg.time)}</span>
+                    {isBot && badge && (
+                      <span style={{ ...styles.badge, background: badge.color + "22", color: badge.color, border: `1px solid ${badge.color}44` }}>
+                        {badge.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {!isBot && <div style={styles.userIcon}>👤</div>}
+              </div>
+            );
+          })}
+
+          {loading && (
+            <div style={{ ...styles.msgRow, justifyContent: "flex-start" }}>
+              <div style={styles.botIcon}>🤖</div>
+              <div style={styles.typing}>
+                <span style={{ ...styles.typingDot, animationDelay: "0ms" }} />
+                <span style={{ ...styles.typingDot, animationDelay: "160ms" }} />
+                <span style={{ ...styles.typingDot, animationDelay: "320ms" }} />
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Quick replies */}
+        {messages.length <= 2 && (
+          <div style={styles.quickReplies}>
+            {QUICK_REPLIES.map((q) => (
+              <button key={q} onClick={() => sendMessage(q)} style={styles.quickBtn}>
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Input */}
+        <div style={styles.inputArea}>
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Type your message… (Enter to send)"
+            rows={1}
+            style={styles.textarea}
+            disabled={loading}
+          />
+          <button
+            onClick={() => sendMessage()}
+            disabled={loading || !input.trim()}
+            style={{
+              ...styles.sendBtn,
+              opacity: loading || !input.trim() ? 0.4 : 1,
+              cursor: loading || !input.trim() ? "not-allowed" : "pointer",
+            }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M22 2L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Sans:wght@400;500&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        @keyframes bounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+          40% { transform: translateY(-6px); opacity: 1; }
+        }
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontFamily: "'DM Sans', sans-serif",
+    position: "relative",
+    overflow: "hidden",
+    padding: "16px",
+  },
+  blob1: {
+    position: "absolute", width: 400, height: 400,
+    borderRadius: "50%",
+    background: "radial-gradient(circle, rgba(120,80,255,0.25) 0%, transparent 70%)",
+    top: -100, left: -100, pointerEvents: "none",
+  },
+  blob2: {
+    position: "absolute", width: 300, height: 300,
+    borderRadius: "50%",
+    background: "radial-gradient(circle, rgba(0,200,255,0.15) 0%, transparent 70%)",
+    bottom: -50, right: -50, pointerEvents: "none",
+  },
+  window: {
+    width: "100%", maxWidth: 520,
+    borderRadius: 20,
+    background: "rgba(255,255,255,0.04)",
+    backdropFilter: "blur(24px)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    boxShadow: "0 32px 80px rgba(0,0,0,0.5)",
+    display: "flex", flexDirection: "column",
+    overflow: "hidden",
+    maxHeight: "90vh",
+  },
+  header: {
+    padding: "18px 20px",
+    background: "rgba(255,255,255,0.06)",
+    borderBottom: "1px solid rgba(255,255,255,0.08)",
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+  },
+  headerLeft: { display: "flex", alignItems: "center", gap: 12 },
+  avatar: {
+    width: 44, height: 44, borderRadius: 12,
+    background: "linear-gradient(135deg, #7b5cfa, #3ecfff)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    flexShrink: 0,
+    boxShadow: "0 4px 16px rgba(123,92,250,0.4)",
+  },
+  agentName: {
+    fontFamily: "'Syne', sans-serif",
+    fontWeight: 700, fontSize: 15, color: "#fff",
+  },
+  statusRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 2 },
+  dot: {
+    width: 7, height: 7, borderRadius: "50%",
+    background: "#22c55e",
+    boxShadow: "0 0 6px #22c55e",
+  },
+  statusText: { fontSize: 11, color: "rgba(255,255,255,0.5)" },
+  newBtn: {
+    fontSize: 12, fontFamily: "'Syne', sans-serif", fontWeight: 600,
+    color: "rgba(255,255,255,0.7)",
+    background: "rgba(255,255,255,0.07)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 8, padding: "6px 14px", cursor: "pointer",
+    transition: "all 0.2s",
+  },
+  messages: {
+    flex: 1, overflowY: "auto", padding: "20px 16px",
+    display: "flex", flexDirection: "column", gap: 16,
+    scrollbarWidth: "thin",
+    scrollbarColor: "rgba(255,255,255,0.1) transparent",
+  },
+  msgRow: {
+    display: "flex", alignItems: "flex-end", gap: 8,
+    animation: "fadeUp 0.25s ease-out",
+  },
+  botIcon: {
+    width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+    background: "linear-gradient(135deg, #7b5cfa, #3ecfff)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 14,
+  },
+  userIcon: {
+    width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+    background: "rgba(255,255,255,0.12)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 14,
+  },
+  bubble: {
+    borderRadius: 16, padding: "11px 15px",
+    fontSize: 14, lineHeight: 1.6,
+    whiteSpace: "pre-wrap", wordBreak: "break-word",
+  },
+  botBubble: {
+    background: "rgba(255,255,255,0.09)",
+    color: "rgba(255,255,255,0.92)",
+    borderBottomLeftRadius: 4,
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  userBubble: {
+    background: "linear-gradient(135deg, #7b5cfa, #5b8dee)",
+    color: "#fff",
+    borderBottomRightRadius: 4,
+    boxShadow: "0 4px 16px rgba(123,92,250,0.35)",
+  },
+  meta: {
+    display: "flex", alignItems: "center", gap: 6,
+    marginTop: 4, paddingLeft: 4,
+  },
+  timeStr: { fontSize: 10, color: "rgba(255,255,255,0.3)" },
+  badge: {
+    fontSize: 10, fontWeight: 600, letterSpacing: "0.04em",
+    padding: "2px 7px", borderRadius: 20,
+    fontFamily: "'Syne', sans-serif",
+  },
+  typing: {
+    background: "rgba(255,255,255,0.09)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 16, borderBottomLeftRadius: 4,
+    padding: "12px 16px",
+    display: "flex", gap: 5, alignItems: "center",
+  },
+  typingDot: {
+    display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+    background: "rgba(255,255,255,0.5)",
+    animation: "bounce 1.2s infinite ease-in-out",
+  },
+  quickReplies: {
+    display: "flex", flexWrap: "wrap", gap: 8,
+    padding: "0 16px 12px",
+  },
+  quickBtn: {
+    fontSize: 12, fontFamily: "'DM Sans', sans-serif",
+    color: "rgba(255,255,255,0.75)",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.15)",
+    borderRadius: 20, padding: "6px 14px",
+    cursor: "pointer", transition: "all 0.2s",
+  },
+  inputArea: {
+    padding: "12px 16px 16px",
+    borderTop: "1px solid rgba(255,255,255,0.08)",
+    display: "flex", gap: 10, alignItems: "flex-end",
+    background: "rgba(0,0,0,0.15)",
+  },
+  textarea: {
+    flex: 1, resize: "none", border: "none", outline: "none",
+    background: "rgba(255,255,255,0.07)",
+    color: "#fff", fontSize: 14, lineHeight: 1.5,
+    padding: "11px 14px", borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.1)",
+    fontFamily: "'DM Sans', sans-serif",
+    caretColor: "#7b5cfa",
+    maxHeight: 120,
+  },
+  sendBtn: {
+    width: 44, height: 44, borderRadius: 12, border: "none",
+    background: "linear-gradient(135deg, #7b5cfa, #3ecfff)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    flexShrink: 0, boxShadow: "0 4px 16px rgba(123,92,250,0.4)",
+    transition: "all 0.2s",
+  },
+};
